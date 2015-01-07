@@ -1,3 +1,4 @@
+/* jshint esnext: true */
 /*********************************************************************
  *                          Private Methods                          *
  *********************************************************************/
@@ -21,7 +22,7 @@ function parseMove(move) {
     check: matches[6] === '+',
     checkMate: matches[6] === '#',
     castles: false
-  }
+  };
 }
 
 function Move(from, to) {
@@ -36,7 +37,7 @@ function Move(from, to) {
 export default function Board(fen) {
 
   this.boardx88 = new Uint8Array(128);
-  this.legalMoves = new Uint32Array(256);
+  this.legalMoves = []; //new Uint32Array(256);
   this.pieceList = {};
 
   if (fen == null)
@@ -52,8 +53,9 @@ export default function Board(fen) {
   this.halfMoves = fields[4];
   this.fullMoves = fields[5];
 
-  this.initBoardFromFEN(fields[0]),
+  this.initBoardFromFEN(fields[0]);
   this.initPieceList();
+  this.generateMoves();
 }
 
 /*********************************************************************
@@ -205,12 +207,45 @@ Board.prototype.isLegalMove = function (move) {
 };
 
 Board.prototype.generateMoves = function () {
+  var squares, moves;
 
+  this.legalMoves = [];
+
+  for (var pieceCode in this.pieceList) {
+    squares = this.pieceList[pieceCode];
+    piece = CODES[pieceCode];
+    for (var i = 0, len = squares.length; i < len; i++) {
+      switch (piece) {
+      case 'P': case 'p':
+        moves = this.generatePawnMoves(squares[i]);
+        break;
+      case 'N': case 'n':
+        moves = this.generateKnightMoves(squares[i]);
+        break;
+      case 'K': case 'k':
+        moves = this.generateKingMoves(squares[i]);
+        break;
+      case 'B': case 'b':
+        moves = this.generateBishopMoves(squares[i]);
+        break;
+      case 'R': case 'r':
+        moves = this.generateRookMoves(squares[i]);
+        break;
+      case 'Q': case 'q':
+        moves = this.generateQueenMoves(squares[i]);
+        break;
+      default:
+        throw Error('invalid piece code');
+      }
+
+      this.legalMoves = this.legalMoves.concat(moves);
+    }
+  }
 };
 
-Board.prototype.generatePawnMoves = function generatePawnMoves(sq) {
+Board.prototype.generatePawnMoves = function (sq) {
   var board = this.boardx88;
-  var ep = this.ep
+  var ep = this.ep;
   var pieceCode = board[sq];
   var iswhite = isWhite(pieceCode);
   var pmul = iswhite ? 1 : -1;
@@ -250,25 +285,89 @@ Board.prototype.generatePawnMoves = function generatePawnMoves(sq) {
 
   return moves;
 
-}
-Board.prototype.generateBishopMoves = function (sq) {
-
 };
 
 Board.prototype.generateKnightMoves = function (sq) {
+  var board = this.boardx88;
+  var pieceCode = board[sq];
+  var iswhite = isWhite(pieceCode);
+  var deltas = PIECE_DELTAS.n;
+  var moves = [];
+  var tmp, tmpCode;
 
+  for (var i = 0, len = deltas.length; i < len; i++) {
+    tmp = sq + deltas[i];
+    if (!(tmp & 0x88)) { // move on board
+      tmpCode = board[tmp];
+      if (tmpCode === PIECES.x) { // square empty
+        moves.push(new Move(sq, tmp));
+      } else if (isWhite(tmpCode) ^ iswhite) { // capturable piece
+        moves.push(new Move(sq, tmp));
+      }
+    }
+  }
+
+  return moves;
+
+};
+
+function generateSlidingMoves(board, sq, deltas) {
+  var pieceCode = board[sq];
+  var iswhite = isWhite(pieceCode);
+  var moves = [];
+  var tmp, delta;
+
+  for (var i = 0, len = deltas.length; i < len; i++) {
+    delta = deltas[i];
+
+    // free squares
+    for (tmp = sq + delta; !(tmp & 0x88 || board[tmp] !== PIECES.x); tmp += delta) {
+      moves.push(new Move(sq, tmp));
+    }
+
+    // capture
+    if (!(tmp & 0x88) && isWhite(board[tmp]) ^ iswhite) {
+      moves.push(new Move(sq, tmp));
+    }
+  }
+
+  return moves;
+}
+
+Board.prototype.generateKingMoves = function (sq) {
+  var board = this.boardx88;
+  var pieceCode = board[sq];
+  var iswhite = isWhite(pieceCode);
+  var deltas = PIECE_DELTAS.k;
+  var moves = [];
+  var tmp, tmpCode;
+
+  for (var i = 0, len = deltas.length; i < len; i++) {
+    tmp = sq + deltas[i];
+    if (!(tmp & 0x88)) { // move on board
+      tmpCode = board[tmp];
+      if (tmpCode === PIECES.x) { // square empty
+        moves.push(new Move(sq, tmp));
+      } else if (isWhite(tmpCode) ^ iswhite) { // capturable piece
+        moves.push(new Move(sq, tmp));
+      }
+    }
+  }
+
+  return moves;
+
+};
+
+Board.prototype.generateBishopMoves = function (sq) {
+  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.b);
 };
 
 Board.prototype.generateRookMoves = function (sq) {
-
+  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.r);
 };
 
 Board.prototype.generateQueenMoves = function (sq) {
-
-};
-
-Board.prototype.generateKingMoves = function (sq) {
-
+  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.q);
 };
 
 /*********************************************************************
