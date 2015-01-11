@@ -1,33 +1,16 @@
 /* jshint esnext: true */
+/* global Board */
+/* global Uint8Array */
+/* global Int8Array */
 /*********************************************************************
  *                          Private Methods                          *
  *********************************************************************/
 
-function parseMove(move) {
-  if (move === 'O-O')
-    return { castles: 'K' };
-
-  if (move === 'O-O-O')
-    return { castles: 'Q' };
-
-  var re = /([NBRKQ])?([abcdefgh12345678])?(x)?([abcdefgh][12345678])(=[NBRKQ])?([#+])?/;
-  var matches = re.exec(move);
-
-  return {
-    piece: (matches[1] == null) ? 'P' : matches[1],
-    piecePos: matches[2],
-    capture: !!matches[3],
-    dest: pgntox88(matches[4]),
-    promoteTo: (matches[5] == null) ? undefined : matches[5][1],
-    check: matches[6] === '+',
-    checkMate: matches[6] === '#',
-    castles: false
-  };
-}
-
-function Move(from, to) {
+function Move(from, to, opts) {
   this.to = to;
   this.from = from;
+  this.castle = opts ? opts.castle : undefined;
+  this.promoteTo = opts ? opts.promoteTo : undefined;
 }
 
 /*********************************************************************
@@ -38,7 +21,8 @@ export default function Board(fen) {
 
   this.boardx88 = new Uint8Array(128);
   this.legalMoves = []; //new Uint32Array(256);
-  this.pieceList = {};
+  this.pieceList = new Uint8Array(128);
+  this.pieceList.len = 0;
 
   if (fen == null)
      fen = DEFAULT_FEN;
@@ -47,9 +31,18 @@ export default function Board(fen) {
     throw new TypeError('Invalid FEN');
 
   var fields = fen.split(' ');
+  var castles = { Q: 0, K: 1, q: 2, k: 3 };
+
   this.whiteToMove = fields[1].toLowerCase() === 'w';
-  this.legalCastles = fields[2];
-  this.enPassantSq = fields[3];
+  this.legalCastles = [ 0x0, 0x07, 0x70, 0x77 ];
+
+  for (var castle in castles) {
+    if (fields[2].indexOf(castle) === -1) {
+      this.legalCastles[castles[castle]] = 0xff;
+    }
+  }
+
+  this.enPassant = fields[3];
   this.halfMoves = fields[4];
   this.fullMoves = fields[5];
 
@@ -81,8 +74,8 @@ var PIECES = {
 };
 
 var PIECE_DELTAS = {
-  P: [15, 16, 17, 32],
-  p: [-15, -16, -17, -32],
+  P: [15, 16, 17],
+  p: [-15, -16, -17],
   N: [14, 31, 33, 18, -18, -33, -31, -14],
   n: [14, 31, 33, 18, -18, -33, -31, -14],
   K: [15, 16, 17, 1, -17, -16, -15, -1],
@@ -121,7 +114,7 @@ function sq(rank, file) { return (rank << 4) + file; }
 function file(square)   { return square & 0x7; }
 function rank(square)   { return square >> 4; }
 function pgntox88(pgn)  { return sq(parseInt(pgn[1]) - 1, 'abcdefgh'.indexOf(pgn[0])); }
-function isWhite(pieceCode) { return (pieceCode & 0x8); }
+function isWhite(pieceCode) { return !!(pieceCode & 0x8); }
 
 Board.sq = sq;
 Board.file = file;
@@ -169,86 +162,201 @@ Board.prototype.initBoardFromFEN = function(ranks) {
   }
 };
 
-Board.prototype.move = function (pgnMove) {
-  var move = parseMove(pgnMove);
-
-  if (!this.isLegalMove(move))
-    throw new IllegalMoveException(pgnMove);
-
-};
-
-Board.prototype.updatePieceList = function (move) {
-
-};
-
 Board.prototype.initPieceList = function () {
-  var piece;
+  var board = this.boardx88;
+  var kings = 0;
+  var pieceCode;
 
-  for (var code in DELTAS) {
-    this.pieceList[code] = [];
-  }
+  // initialize two kings to invalid squares
+  this.pieceList[0] = 0xff; // white king
+  this.pieceList[1] = 0xff; // black king
 
-  for (var i = 0; i < 128; i++) {
+  for (var i = 0, j = 2; i < 128; i++) {
+    pieceCode = board[i];
+
     if (i & 0x88) {
       i += 0x7;
       continue;
     }
 
-    piece = this.boardx88[i];
+    if (pieceCode === PIECES.K) {
+      this.pieceList[0] = i;
+      kings += 2;
+    } else if (pieceCode === PIECES.k) {
+      this.pieceList[1] = i;
+      kings += 3;
+    } else if (pieceCode !== PIECES.x) {
+      this.pieceList[j++] = i;
+    }
+  }
 
-    if (piece !== PIECES.x)
-      this.pieceList[piece].push(i);
+  /*
+   *if (kings !== 5) {
+   *  throw new TypeError('invalid FEN string: Board requires exactly two oppositely colored kings');
+   *}
+   */
+
+  this.pieceList.len = j - 1;
+};
+
+Board.prototype.parsePGN = function (move) {
+  if (move === 'O-O')
+    return { castles: 'K' };
+
+  if (move === 'O-O-O')
+    return { castles: 'Q' };
+
+  var re = /([NBRKQ])?([abcdefgh12345678])?(x)?([abcdefgh][12345678])(=[NBRKQ])?([#+])?/;
+  var matches = re.exec(move);
+
+  return {
+    piece: (matches[1] == null) ? 'P' : matches[1],
+    piecePos: matches[2],
+    capture: !!matches[3],
+    dest: pgntox88(matches[4]),
+    promoteTo: (matches[5] == null) ? undefined : matches[5][1],
+    check: matches[6] === '+',
+    checkMate: matches[6] === '#',
+    castles: undefined
+  };
+};
+
+Board.prototype.move = function (move) {
+  var fullMove;
+
+  if (typeof move === 'string') {
+    move = this.parsePGN(move);
+  }
+
+  fullMove = this.checkMove(move);
+
+  if (!fullMove)
+    throw new IllegalMoveException(move);
+
+  this.whiteToMove = !this.whiteToMove;
+  this.updatePieceList(fullMove); // must be done before updating board
+  this.updateBoard(fullMove);
+  this.updateLegalCastles(fullMove);
+  this.generateMoves();
+};
+
+Board.prototype.updateBoard = function (move) {
+  var board = this.boardx88;
+  var from = move.from, to = move.to;
+  var pieceCode = board[from];
+
+  if (move.castle) {
+    board[move.castle.to] = board[move.castle.from];
+    board[move.castle.from] = PIECES.x;
+  }
+
+  board[from] = PIECES.x;
+  board[to] = pieceCode;
+
+};
+
+Board.prototype.updateLegalCastles = function (move) {
+  var pieceList = this.pieceList;
+  var legalCastles = this.legalCastles;
+  var from = move.from;
+
+  if (legalCastles.indexOf(from) > -1) {
+    legalCastles[legalCastles.indexOf(from)] = 0xff;
+  }
+
+  if (from === pieceList[0]) {
+    legalCastles[0] = 0xff;
+    legalCastles[1] = 0xff;
+  }
+
+  if (from === pieceList[1]) {
+    legalCastles[2] = 0xff;
+    legalCastles[3] = 0xff;
   }
 };
 
+Board.prototype.updatePieceList = function (move) {
+  var pieceList = this.pieceList;
 
-Board.prototype.isLegalMove = function (move) {
-  return true;
-};
+  for (var i = 0, len = pieceList.len; i < len; i++) {
+    if (pieceList[i] === move.to) { // captured piece
+      pieceList.len--;
+      len--;
+      pieceList[i] = pieceList[len];
+    }
 
-Board.prototype.generateMoves = function () {
-  var squares, moves;
+    if (pieceList[i] === move.from) { // moved piece
+      pieceList[i] = move.to;
+    }
 
-  this.legalMoves = [];
-
-  for (var pieceCode in this.pieceList) {
-    squares = this.pieceList[pieceCode];
-    piece = CODES[pieceCode];
-    for (var i = 0, len = squares.length; i < len; i++) {
-      switch (piece) {
-      case 'P': case 'p':
-        moves = this.generatePawnMoves(squares[i]);
-        break;
-      case 'N': case 'n':
-        moves = this.generateKnightMoves(squares[i]);
-        break;
-      case 'K': case 'k':
-        moves = this.generateKingMoves(squares[i]);
-        break;
-      case 'B': case 'b':
-        moves = this.generateBishopMoves(squares[i]);
-        break;
-      case 'R': case 'r':
-        moves = this.generateRookMoves(squares[i]);
-        break;
-      case 'Q': case 'q':
-        moves = this.generateQueenMoves(squares[i]);
-        break;
-      default:
-        throw Error('invalid piece code');
-      }
-
-      this.legalMoves = this.legalMoves.concat(moves);
+    if (move.castle && pieceList[i] === move.castle.from) {
+      pieceList[i] = move.castle.to;
     }
   }
 };
 
+Board.prototype.checkMove = function (move) {
+  var legalMoves = this.legalMoves;
+  for (var i = 0, len = legalMoves.length; i < len; i++) {
+    if (legalMoves[i].from === move.from &&
+        legalMoves[i].to === move.to) {
+      return legalMoves[i];
+    }
+  }
+
+  return false;
+};
+
+Board.prototype.generatePieceMoves = function (sq, pieceCode, deltas) {
+  switch (pieceCode) {
+    case PIECES.P: case PIECES.p:
+      return this.generatePawnMoves(sq);
+    case PIECES.N: case PIECES.n:
+      return this.generateJumperMoves(sq, deltas || PIECE_DELTAS.n);
+    case PIECES.K: case PIECES.k:
+      return this.generateJumperMoves(sq, deltas || PIECE_DELTAS.k);
+    case PIECES.B: case PIECES.b:
+      return this.generateSliderMoves(sq, deltas || PIECE_DELTAS.b);
+    case PIECES.R: case PIECES.r:
+      return this.generateSliderMoves(sq, deltas || PIECE_DELTAS.r);
+    case PIECES.Q: case PIECES.q:
+      return this.generateSliderMoves(sq, deltas || PIECE_DELTAS.q);
+    default:
+      throw Error('invalid piece code');
+  }
+};
+
+Board.prototype.generateMoves = function (whiteToMove) {
+  var board = this.boardx88;
+  var pieceList = this.pieceList;
+  var pieceCode, moves;
+
+  this.legalMoves = [];
+
+  if (whiteToMove == null) {
+    whiteToMove = this.whiteToMove;
+  }
+
+  for (var i = 0, len = pieceList.len; i < len; i++) {
+    pieceCode = board[pieceList[i]];
+
+    if (whiteToMove !== isWhite(pieceCode)) {
+      continue;
+    }
+
+    moves = this.generatePieceMoves(pieceList[i], pieceCode);
+    this.legalMoves = this.legalMoves.concat(moves);
+  }
+
+  this.legalMoves = this.legalMoves.concat(this.generateCastles());
+};
+
 Board.prototype.generatePawnMoves = function (sq) {
   var board = this.boardx88;
-  var ep = this.ep;
+  var ep = this.enPassant;
   var pieceCode = board[sq];
-  var iswhite = isWhite(pieceCode);
-  var pmul = iswhite ? 1 : -1;
+  var whitePawn = isWhite(pieceCode);
+  var pmul = whitePawn ? 1 : -1;
   var moves = [];
   var doubleMove = false;
   var tmp, tmpCode;
@@ -265,7 +373,7 @@ Board.prototype.generatePawnMoves = function (sq) {
     if (!(tmp & 0x88)) { // move on board
       tmpCode = board[tmp];
       if (tmpCode !== PIECES.x) { // square not empty
-        if (isWhite(tmpCode) ^ iswhite) { // piece opposite color
+        if (isWhite(tmpCode) !== whitePawn) { // piece opposite color
           moves.push(new Move(sq, tmp));
         }
       } else if (tmp === ep) { // e.p.
@@ -278,7 +386,7 @@ Board.prototype.generatePawnMoves = function (sq) {
   if (rank(sq) === (iswhite ? 1 : 6)) {
     tmp = pmul * 32 + sq;
     if (doubleMove && !(tmp & 0x88) && board[tmp] === PIECES.x) {
-      moves.push(new Move(sq, tmp));
+      moves.push(new Move(sq, tmp, { enPassant: tmp - pmul * 16 }));
     }
 
   }
@@ -287,11 +395,10 @@ Board.prototype.generatePawnMoves = function (sq) {
 
 };
 
-Board.prototype.generateKnightMoves = function (sq) {
+Board.prototype.generateJumperMoves = function (sq, deltas) {
   var board = this.boardx88;
   var pieceCode = board[sq];
   var iswhite = isWhite(pieceCode);
-  var deltas = PIECE_DELTAS.n;
   var moves = [];
   var tmp, tmpCode;
 
@@ -308,10 +415,10 @@ Board.prototype.generateKnightMoves = function (sq) {
   }
 
   return moves;
-
 };
 
-function generateSlidingMoves(board, sq, deltas) {
+Board.prototype.generateSliderMoves = function (sq, deltas) {
+  var board = this.boardx88;
   var pieceCode = board[sq];
   var iswhite = isWhite(pieceCode);
   var moves = [];
@@ -332,42 +439,137 @@ function generateSlidingMoves(board, sq, deltas) {
   }
 
   return moves;
-}
+};
 
-Board.prototype.generateKingMoves = function (sq) {
-  var board = this.boardx88;
-  var pieceCode = board[sq];
-  var iswhite = isWhite(pieceCode);
-  var deltas = PIECE_DELTAS.k;
+Board.prototype.generateCastles = function (whiteToMove) {
+  var legalCastles = this.legalCastles;
   var moves = [];
-  var tmp, tmpCode;
+  var delta, goodLen, rookTo, rookSq;
 
-  for (var i = 0, len = deltas.length; i < len; i++) {
-    tmp = sq + deltas[i];
-    if (!(tmp & 0x88)) { // move on board
-      tmpCode = board[tmp];
-      if (tmpCode === PIECES.x) { // square empty
-        moves.push(new Move(sq, tmp));
-      } else if (isWhite(tmpCode) ^ iswhite) { // capturable piece
-        moves.push(new Move(sq, tmp));
-      }
+  if (whiteToMove == null) {
+    whiteToMove = this.whiteToMove;
+  }
+
+  for (var i = 0, len = legalCastles.length; i < len; i++) {
+    rookSq = legalCastles[i];
+
+    if (rookSq === 0xff || whiteToMove === legalCastles[i] > 0x55) {
+      continue;
+    }
+
+    delta = (file(rookSq) > 3) ? -1 : 1;
+    goodLen = (file(rookSq) > 3) ? 2 : 3;
+    rookTo = rookSq + delta * goodLen;
+    if (this.generateSliderMoves(rookSq, [delta]).length === goodLen) {
+      moves.push(new Move(
+        rookTo + delta,
+        rookTo - delta,
+        { castle: { from: rookSq, to: rookTo } }
+      ));
     }
   }
 
   return moves;
-
 };
 
-Board.prototype.generateBishopMoves = function (sq) {
-  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.b);
+Board.prototype.squareOccupied = function (rank, file) {
+  if (this.boardx88[sq(rank, file)] !== PIECES.x) {
+    return true;
+  } else {
+    return false;
+  }
 };
 
-Board.prototype.generateRookMoves = function (sq) {
-  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.r);
+Board.prototype.isSliderAttacking = function (from, to, deltas, xray) {
+  var board = this.boardx88;
+  var delta, pinnedSq;
+  var offset = to - from;
+
+  // checks if a delta can arrive at an offset given an empty board
+  function isValidDelta(offset, delta) {
+    return (
+      (offset > 0) === (delta > 0) && // delta headed in same direction
+      offset / delta < 8 && // delta takes less than 8 squares to get to dest
+      offset % delta === 0 // delta arrives at dest
+    );
+  }
+
+  xray = xray || 0;
+
+  // iterate over valid deltas
+  for (var i = 0, len = deltas.length; i < len; i++) {
+    delta = deltas[i];
+
+    // skip if delta can never get to a given square
+    if (!isValidDelta(offset, delta)) {
+      continue;
+    }
+
+    // once we are here, we know we have found the only possibly correct delta
+    for (var tmp = from + delta; !(tmp & 0x88); tmp += delta) {
+
+      // we have reached the destination so return affirmative
+      if (tmp === to) {
+        return (pinnedSq != null) ? pinnedSq : true;
+      }
+
+      // a square on the way is occupied so the destination is unreachable
+      if (board[tmp] !== PIECES.x) {
+
+        // if we aren't calculating xray attacks we can stop
+        if (!xray) {
+          return false;
+        }
+
+        xray--;
+        pinnedSq = tmp;
+      }
+    }
+
+    return false;
+  }
 };
 
-Board.prototype.generateQueenMoves = function (sq) {
-  return generateSlidingMoves(this.boardx88, sq, PIECE_DELTAS.q);
+Board.prototype.isPieceAttacking = function (from, to, pieceCode, deltas) {
+  var isSlider = !!(pieceCode & 0x4);
+
+  if (deltas) {
+    deltas = deltas;
+  } else if (pieceCode === PIECES.p) {
+    deltas = [-15, -17];
+  } else if (pieceCode === PIECES.P) {
+    deltas = [15, 17];
+  } else {
+    deltas = DELTAS[pieceCode];
+  }
+
+  if (!isSlider) {
+    return deltas.indexOf(to - from) > -1;
+  } else {
+    return this.isSliderAttacking(to, from, pieceCode, deltas);
+  }
+};
+
+Board.prototype.squareAttacked = function (sq, whiteToMove) {
+  var board = this.boardx88;
+  var pieceList = this.pieceList;
+  var attackSq, attackPiece;
+
+  for (var i = 0, len = pieceList.len; i < len; i++) {
+    attackSq = pieceList[i];
+    attackPiece = board[attackSq];
+
+    if (whiteToMove !== isWhite(attackPiece)) {
+      continue;
+    }
+
+    if (this.isPieceAttacking(attackSq, sq, attackPiece)) {
+      return true;
+    }
+  }
+
+  return false;
+
 };
 
 /*********************************************************************

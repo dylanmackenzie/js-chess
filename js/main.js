@@ -1,5 +1,6 @@
-import BoardView from 'board-view.js';
 import Board from 'board.js';
+import BoardView from 'board-view.js';
+import BoardController from 'board-controller.js';
 
 window.onload = function () {
   var canvas = document.querySelector('canvas');
@@ -21,6 +22,7 @@ window.onload = function () {
     r: { x: 180, y: 45 },
     p: { x: 225, y: 45 }
   };
-  var view = new BoardView(canvas, board, theme);
+  window.view = new BoardView(canvas, board, theme);
+  var ctrl = new BoardController(board, view);
   view.init();
 };

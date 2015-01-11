@@ -1,4 +1,11 @@
-import Board from 'board.js'
+/* jshint esnext: true */
+/* global it */
+/* global describe */
+/* global before */
+/* global require */
+/* global console */
+
+import Board from 'board.js';
 var _ = require('lodash');
 var assert = require('chai').assert;
 var util = require('util');
@@ -61,7 +68,6 @@ describe('Board', function () {
     var board, b2, e7;
     before(function () {
       board = new Board('8/4p2P/2p2N2/8/4pP2/p1r4P/1P6/8 w - e3 3 6');
-      console.log(board.toString());
       b2= board.generatePawnMoves(pgn('b2'));
       e7= board.generatePawnMoves(pgn('e7'));
     });
@@ -87,7 +93,6 @@ describe('Board', function () {
     var board, d8, e1;
     before(function () {
       board = new Board('3n4/8/8/8/8/3N4/2b3q1/4N3 w - - 3 6');
-      console.log(board.toString());
       d8 = board.generateKnightMoves(pgn('d8'));
       e1 = board.generateKnightMoves(pgn('e1'));
     });
@@ -124,7 +129,6 @@ describe('Board', function () {
     var board, c6;
     before(function () {
       board = new Board('2n5/8/2r2B2/2Q5/8/8/8/8 - - 1 1');
-      console.log(board.toString());
       c6 = board.generateRookMoves(pgn('c6'));
     });
     it('should not move offboard', function () {
@@ -145,7 +149,6 @@ describe('Board', function () {
     var board, f6;
     before(function () {
       board = new Board('3N4/6B1/4pQb1/8/5N1n/8/8/8 - - 1 1');
-      console.log(board.toString());
       f6 = board.generateQueenMoves(pgn('f6'));
     });
     it('should not move offboard', function () {
@@ -176,6 +179,39 @@ describe('Board', function () {
     });
     it('should generate proper moves for a starting position', function () {
 
+    });
+  });
+
+  describe('#move()', function () {
+    var board;
+    before(function () {
+      board = new Board();
+    });
+    it('should take a Move object as a parameter', function () {
+
+    });
+    it('should update the pieceList', function () {
+      board.move({ from: pgn('d2'), to: pgn('d4') });
+      board.move({ from: pgn('g8'), to: pgn('f6') });
+      board.move({ from: pgn('d4'), to: pgn('d5') });
+      board.move({ from: pgn('e7'), to: pgn('e6') });
+      board.move({ from: pgn('d5'), to: pgn('e6') });
+
+    });
+    it('should update the board', function () {
+
+    });
+
+  });
+
+  describe('#squareAttacked()', function () {
+    var board;
+    before(function () {
+      board = new Board('r3k2r/pp2ppbp/2npb1p1/Q2N4/3nP3/1P3N1B/PBP3PP/3RK2R b - - 2 5');
+    });
+    it('should detect if a square is attacked', function () {
+      assert.ok(board.squareAttacked(pgn('c7'), true));
+      assert.notOk(board.squareAttacked(pgn('c7'), false));
     });
   });
 });
