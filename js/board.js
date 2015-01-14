@@ -1,7 +1,6 @@
 /* jshint esnext: true */
 /* global Board */
 /* global Uint8Array */
-/* global Int8Array */
 /*********************************************************************
  *                          Private Methods                          *
  *********************************************************************/
@@ -12,6 +11,25 @@ function Move(from, to, opts) {
   this.castle = opts ? opts.castle : undefined;
   this.promoteTo = opts ? opts.promoteTo : undefined;
 }
+Move.prototype.inspect = function () {
+  var val, str = '{ ';
+
+  for (var prop in this) {
+    if (!this.hasOwnProperty(prop)) {
+      continue
+    }
+
+    val = this[prop];
+
+    if (prop === 'to' || prop === 'from') {
+      val = x88topgn(val);
+    }
+
+    str += prop+': '+val+', ';
+  }
+
+  return str + '}'
+}
 
 /*********************************************************************
  *                               Board                               *
@@ -21,14 +39,14 @@ export default function Board(fen) {
 
   this.boardx88 = new Uint8Array(128);
   this.legalMoves = []; //new Uint32Array(256);
-  this.pieceList = new Uint8Array(128);
+  this.pieceList = new Uint8Array(64);
   this.pieceList.len = 0;
 
   if (fen == null)
      fen = DEFAULT_FEN;
 
-  if (/(\/[\d\w]{0, 8}{8}) [wb] ([kqKQ]+|-) ([\w\d]+|-) \d+ \d+/.test(fen))
-    throw new TypeError('Invalid FEN');
+  if (!/[1-8pbnrqk\/]{15,} [wb] ([kq]+|-) ([\w\d]+|-) \d+ \d+/i.test(fen))
+    throw new TypeError('Invalid FEN:' + fen);
 
   var fields = fen.split(' ');
   var castles = { Q: 0, K: 1, q: 2, k: 3 };
@@ -42,7 +60,7 @@ export default function Board(fen) {
     }
   }
 
-  this.enPassant = fields[3];
+  this.enPassant = fields[3] == '-' ? 0xff : pgntox88(fields[3]);
   this.halfMoves = fields[4];
   this.fullMoves = fields[5];
 
@@ -115,12 +133,26 @@ function file(square)   { return square & 0x7; }
 function rank(square)   { return square >> 4; }
 function pgntox88(pgn)  { return sq(parseInt(pgn[1]) - 1, 'abcdefgh'.indexOf(pgn[0])); }
 function isWhite(pieceCode) { return !!(pieceCode & 0x8); }
+function isSlider(pieceCode) { return !!(pieceCode & 0x4); }
+function x88topgn(sq) { return 'abcdefgh'[file(sq)] + '12345678'[rank(sq)]; }
+
+// checks if a delta can arrive at an offset given an empty board
+function isValidDelta(offset, delta) {
+  return (
+    (offset > 0) === (delta > 0) && // delta headed in same direction
+    offset / delta < 8 && // delta takes less than 8 squares to get to dest
+    offset % delta === 0 // delta arrives at dest
+  );
+}
+
 
 Board.sq = sq;
 Board.file = file;
 Board.rank = rank;
 Board.pgntox88 = pgntox88;
 Board.isWhite = isWhite;
+Board.isValidDelta = isValidDelta;
+Board.isSlider = isSlider;
 
 /*********************************************************************
  *                      Board Instance Methods                       *
@@ -196,7 +228,7 @@ Board.prototype.initPieceList = function () {
    *}
    */
 
-  this.pieceList.len = j - 1;
+  this.pieceList.len = j;
 };
 
 Board.prototype.parsePGN = function (move) {
@@ -221,7 +253,7 @@ Board.prototype.parsePGN = function (move) {
   };
 };
 
-Board.prototype.move = function (move) {
+Board.prototype.makeMove = function (move) {
   var fullMove;
 
   if (typeof move === 'string') {
@@ -253,6 +285,69 @@ Board.prototype.updateBoard = function (move) {
   board[from] = PIECES.x;
   board[to] = pieceCode;
 
+};
+
+Board.prototype.filterLegalMoves = function (checkers, whiteToMove) {
+  var board = this.boardx88;
+  var pieceList = this.pieceList;
+  var kingSq, checkingSq;
+  var kingOffset, checkingOffset;
+  var that = this;
+
+  kingSq = pieceList[ whiteToMove ? 0 : 1 ];
+
+  if (checkers === false) { // no check
+    return this.legalMoves.filter(function (move) {
+      if (move.from === kingSq) {
+        return !that.squareAttacked(move.to, !whiteToMove);
+      } else {
+        return true;
+      }
+    });
+  } else if (checkers.length >= 2) { // double check
+    return this.legalMoves.filter(function (move) {
+      if (move.from === kingSq) {
+        return !that.squareAttacked(move.to, !whiteToMove);
+      } else {
+        return false;
+      }
+    });
+  } else if (checkers.length === 1) { // check
+    checkingSq = checkers[0];
+
+    return this.legalMoves.filter(function (move) {
+      if (move.from === kingSq) { // king move
+        return !that.squareAttacked(move.to, !whiteToMove);
+      }
+
+      if (move.to === checkingSq) { // capture checking piece
+        return true;
+      }
+
+      if (!isSlider(board[checkingSq])) { // unblockable checking piece
+        return false;
+      }
+
+      kingOffset = move.to - kingSq;
+      checkingOffset = move.to - checkingSq;
+
+      if (kingOffset > 0 === checkingOffset > 0) { // dest not between pieces
+        return false;
+      }
+
+      for (var i = 0, len = PIECE_DELTAS.q.length; i < len; i++) {
+        if (isValidDelta(checkingOffset, PIECE_DELTAS.q[i])) {
+          if (isValidDelta(-1 * kingOffset, PIECE_DELTAS.q[i])) {
+            return true;
+          } else {
+            return false;
+          }
+        }
+      }
+
+      return false;
+    });
+  }
 };
 
 Board.prototype.updateLegalCastles = function (move) {
@@ -297,6 +392,7 @@ Board.prototype.updatePieceList = function (move) {
 
 Board.prototype.checkMove = function (move) {
   var legalMoves = this.legalMoves;
+
   for (var i = 0, len = legalMoves.length; i < len; i++) {
     if (legalMoves[i].from === move.from &&
         legalMoves[i].to === move.to) {
@@ -307,10 +403,100 @@ Board.prototype.checkMove = function (move) {
   return false;
 };
 
+Board.prototype.generateMoves = function (whiteToMove) {
+  var board = this.boardx88;
+  var pieceList = this.pieceList;
+  var pieceCode, moves, sq, pins, kingSq, delta, pinnedDeltas;
+  var checkers;
+
+  this.legalMoves = [];
+
+  if (whiteToMove == null) {
+    whiteToMove = this.whiteToMove;
+  }
+
+  kingSq = this.pieceList[ whiteToMove ? 0 : 1 ];
+
+  if (kingSq !== 0xff) {
+    pins = this.calculatePins(kingSq, whiteToMove);
+  }
+
+  for (var i = 0, len = pieceList.len; i < len; i++) {
+    sq = pieceList[i];
+
+    if (sq === 0xff) {
+      continue;
+    }
+
+    pieceCode = board[sq];
+
+    if (whiteToMove !== isWhite(pieceCode)) {
+      continue;
+    }
+
+    if (pins == null || pins.indexOf(sq) === -1) {
+      moves = this.generatePieceMoves(sq, pieceCode);
+    } else {
+      moves = [];
+      for (var j = 0, len2 = DELTAS[pieceCode].length; j < len2; j++) {
+        delta = DELTAS[pieceCode][j];
+
+        if (isValidDelta(kingSq - sq, delta)) {
+          pinnedDeltas = [delta, -1 * delta];
+          moves = this.generatePieceMoves(sq, pieceCode, pinnedDeltas);
+          break;
+        }
+      }
+    }
+
+    if (moves.length > 0) {
+      this.legalMoves = this.legalMoves.concat(moves);
+    }
+  }
+
+  checkers = this.squareAttacked(kingSq, !whiteToMove, true);
+
+  if (checkers.length === 0) { // no check
+    this.legalMoves = this.legalMoves.concat(this.generateCastles());
+  }
+
+  this.legalMoves = this.filterLegalMoves(checkers, whiteToMove);
+};
+
+Board.prototype.calculatePins = function (sq, whiteToMove) {
+  var board = this.boardx88;
+  var pieceList = this.pieceList;
+  var pieceSq, pieceCode, pinnedSq;
+  var pins = [];
+
+  if (whiteToMove == null) {
+    whiteToMove = this.whiteToMove;
+  }
+
+  for (var i = 2, len = pieceList.len; i < len; i++) {
+    pieceSq = pieceList[i];
+    pieceCode = board[pieceCode];
+
+    if (isWhite(pieceCode) === whiteToMove || !isSlider(pieceCode)) {
+      continue;
+    }
+
+    pinnedSq = this.isSliderAttacking(pieceSq, sq, DELTAS[pieceCode], 1);
+
+    if (!pinnedSq || pinnedSq === true || isWhite(board[pinnedSq]) !== whiteToMove) {
+      continue;
+    }
+
+    pins.push(pinnedSq);
+  }
+
+  return pins;
+};
+
 Board.prototype.generatePieceMoves = function (sq, pieceCode, deltas) {
   switch (pieceCode) {
     case PIECES.P: case PIECES.p:
-      return this.generatePawnMoves(sq);
+      return this.generatePawnMoves(sq, deltas || DELTAS[pieceCode]);
     case PIECES.N: case PIECES.n:
       return this.generateJumperMoves(sq, deltas || PIECE_DELTAS.n);
     case PIECES.K: case PIECES.k:
@@ -322,36 +508,11 @@ Board.prototype.generatePieceMoves = function (sq, pieceCode, deltas) {
     case PIECES.Q: case PIECES.q:
       return this.generateSliderMoves(sq, deltas || PIECE_DELTAS.q);
     default:
-      throw Error('invalid piece code');
+      throw Error('invalid piece code: ' + pieceCode);
   }
 };
 
-Board.prototype.generateMoves = function (whiteToMove) {
-  var board = this.boardx88;
-  var pieceList = this.pieceList;
-  var pieceCode, moves;
-
-  this.legalMoves = [];
-
-  if (whiteToMove == null) {
-    whiteToMove = this.whiteToMove;
-  }
-
-  for (var i = 0, len = pieceList.len; i < len; i++) {
-    pieceCode = board[pieceList[i]];
-
-    if (whiteToMove !== isWhite(pieceCode)) {
-      continue;
-    }
-
-    moves = this.generatePieceMoves(pieceList[i], pieceCode);
-    this.legalMoves = this.legalMoves.concat(moves);
-  }
-
-  this.legalMoves = this.legalMoves.concat(this.generateCastles());
-};
-
-Board.prototype.generatePawnMoves = function (sq) {
+Board.prototype.generatePawnMoves = function (sq, deltas) {
   var board = this.boardx88;
   var ep = this.enPassant;
   var pieceCode = board[sq];
@@ -362,14 +523,22 @@ Board.prototype.generatePawnMoves = function (sq) {
   var tmp, tmpCode;
 
   // Forward
-  tmp = pmul * 16 + sq;
-  if (!(tmp & 0x88) && board[tmp] === PIECES.x) {
-    moves.push(new Move(sq, tmp));
-    doubleMove = true;
+  if (deltas.indexOf(pmul * 16) > -1) {
+    tmp = pmul * 16 + sq;
+    if (!(tmp & 0x88) && board[tmp] === PIECES.x) {
+        moves.push(new Move(sq, tmp));
+      doubleMove = true;
+    }
   }
 
   // Capture
-  for (tmp = sq + 15*pmul; tmp !== 19*pmul + sq; tmp += 2*pmul) {
+  for (var delta = 15*pmul; delta !== 19*pmul; delta += 2*pmul) {
+    if (deltas.indexOf(delta) === -1) {
+      continue
+    }
+
+    tmp = sq + delta;
+
     if (!(tmp & 0x88)) { // move on board
       tmpCode = board[tmp];
       if (tmpCode !== PIECES.x) { // square not empty
@@ -383,9 +552,9 @@ Board.prototype.generatePawnMoves = function (sq) {
   }
 
   // Double Move
-  if (rank(sq) === (iswhite ? 1 : 6)) {
+  if (doubleMove && rank(sq) === (whitePawn ? 1 : 6)) {
     tmp = pmul * 32 + sq;
-    if (doubleMove && !(tmp & 0x88) && board[tmp] === PIECES.x) {
+    if (!(tmp & 0x88) && board[tmp] === PIECES.x) {
       moves.push(new Move(sq, tmp, { enPassant: tmp - pmul * 16 }));
     }
 
@@ -408,7 +577,7 @@ Board.prototype.generateJumperMoves = function (sq, deltas) {
       tmpCode = board[tmp];
       if (tmpCode === PIECES.x) { // square empty
         moves.push(new Move(sq, tmp));
-      } else if (isWhite(tmpCode) ^ iswhite) { // capturable piece
+      } else if (isWhite(tmpCode) !== iswhite) { // capturable piece
         moves.push(new Move(sq, tmp));
       }
     }
@@ -433,7 +602,7 @@ Board.prototype.generateSliderMoves = function (sq, deltas) {
     }
 
     // capture
-    if (!(tmp & 0x88) && isWhite(board[tmp]) ^ iswhite) {
+    if (!(tmp & 0x88) && isWhite(board[tmp]) !== iswhite) {
       moves.push(new Move(sq, tmp));
     }
   }
@@ -442,30 +611,45 @@ Board.prototype.generateSliderMoves = function (sq, deltas) {
 };
 
 Board.prototype.generateCastles = function (whiteToMove) {
+  var pieceList = this.pieceList;
   var legalCastles = this.legalCastles;
   var moves = [];
-  var delta, goodLen, rookTo, rookSq;
+  var kingSq, rookSq, offset, delta, flag;
 
   if (whiteToMove == null) {
     whiteToMove = this.whiteToMove;
   }
 
+  kingSq = pieceList[ whiteToMove ? 0 : 1 ];
+
+  if (kingSq === 0xff) {
+    return moves;
+  }
+
+  if (this.squareAttacked(kingSq, whiteToMove)) {
+    return moves;
+  }
+
   for (var i = 0, len = legalCastles.length; i < len; i++) {
     rookSq = legalCastles[i];
+    flag = true;
 
     if (rookSq === 0xff || whiteToMove === legalCastles[i] > 0x55) {
       continue;
     }
 
-    delta = (file(rookSq) > 3) ? -1 : 1;
-    goodLen = (file(rookSq) > 3) ? 2 : 3;
-    rookTo = rookSq + delta * goodLen;
-    if (this.generateSliderMoves(rookSq, [delta]).length === goodLen) {
-      moves.push(new Move(
-        rookTo + delta,
-        rookTo - delta,
-        { castle: { from: rookSq, to: rookTo } }
-      ));
+    offset = rookSq - kingSq;
+    delta = offset > 0 ? 1 : -1;
+
+    for (var j = 0, tmp = kingSq + delta; j < 2 ; j++, tmp += delta) {
+      if (!this.squareOccupied(tmp) || this.squareAttacked(tmp, !whiteToMove)) {
+        flag = false;
+        break;
+      }
+    }
+
+    if (flag) {
+      moves.push(new Move(kingSq, tmp - delta, { castles: rookSq }));
     }
   }
 
@@ -473,26 +657,21 @@ Board.prototype.generateCastles = function (whiteToMove) {
 };
 
 Board.prototype.squareOccupied = function (rank, file) {
-  if (this.boardx88[sq(rank, file)] !== PIECES.x) {
-    return true;
+  var sq;
+
+  if (file == null) {
+    sq = rank;
   } else {
-    return false;
+    sq = Board.sq(rank, file);
   }
+
+  return this.boardx88[sq] !== PIECES.x;
 };
 
 Board.prototype.isSliderAttacking = function (from, to, deltas, xray) {
   var board = this.boardx88;
   var delta, pinnedSq;
   var offset = to - from;
-
-  // checks if a delta can arrive at an offset given an empty board
-  function isValidDelta(offset, delta) {
-    return (
-      (offset > 0) === (delta > 0) && // delta headed in same direction
-      offset / delta < 8 && // delta takes less than 8 squares to get to dest
-      offset % delta === 0 // delta arrives at dest
-    );
-  }
 
   xray = xray || 0;
 
@@ -510,7 +689,7 @@ Board.prototype.isSliderAttacking = function (from, to, deltas, xray) {
 
       // we have reached the destination so return affirmative
       if (tmp === to) {
-        return (pinnedSq != null) ? pinnedSq : true;
+        return pinnedSq || true;
       }
 
       // a square on the way is occupied so the destination is unreachable
@@ -528,12 +707,12 @@ Board.prototype.isSliderAttacking = function (from, to, deltas, xray) {
 
     return false;
   }
+
+  return false;
 };
 
 Board.prototype.isPieceAttacking = function (from, to, pieceCode, deltas) {
-  var isSlider = !!(pieceCode & 0x4);
-
-  if (deltas) {
+  if (deltas != null) {
     deltas = deltas;
   } else if (pieceCode === PIECES.p) {
     deltas = [-15, -17];
@@ -543,33 +722,50 @@ Board.prototype.isPieceAttacking = function (from, to, pieceCode, deltas) {
     deltas = DELTAS[pieceCode];
   }
 
-  if (!isSlider) {
+  if (!isSlider(pieceCode)) {
     return deltas.indexOf(to - from) > -1;
   } else {
-    return this.isSliderAttacking(to, from, pieceCode, deltas);
+    return this.isSliderAttacking(from, to, deltas);
   }
 };
 
-Board.prototype.squareAttacked = function (sq, whiteToMove) {
+Board.prototype.squareAttacked = function (sq, whiteToMove, doubleAttack) {
   var board = this.boardx88;
   var pieceList = this.pieceList;
-  var attackSq, attackPiece;
+  var attackingSq, attackingPiece;
+  var attacks = [];
+
+  if (whiteToMove == null) {
+    whiteToMove = this.whiteToMove;
+  }
+
+  if (doubleAttack == null) {
+    doubleAttack = false;
+  }
 
   for (var i = 0, len = pieceList.len; i < len; i++) {
-    attackSq = pieceList[i];
-    attackPiece = board[attackSq];
+    attackingSq = pieceList[i];
 
-    if (whiteToMove !== isWhite(attackPiece)) {
+    if (attackingSq === 0xff) {
       continue;
     }
 
-    if (this.isPieceAttacking(attackSq, sq, attackPiece)) {
-      return true;
+    attackingPiece = board[attackingSq];
+
+    if (whiteToMove !== isWhite(attackingPiece)) {
+      continue;
+    }
+
+    if (this.isPieceAttacking(attackingSq, sq, attackingPiece)) {
+      if (!doubleAttack) {
+        return attackingSq;
+      } else {
+        attacks.push(attackingSq);
+      }
     }
   }
 
-  return false;
-
+  return attacks.length === 0 ? false : attacks;
 };
 
 /*********************************************************************

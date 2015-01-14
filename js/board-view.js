@@ -1,4 +1,8 @@
-import Board from 'board.js'
+// jshint esnext: true
+/* global BoardView */
+/* global window */
+
+import Board from 'board.js';
 
 /*********************************************************************
  *                            BoardView                              *
@@ -30,8 +34,9 @@ BoardView.prototype.draw = function () {
   var squareHeight = this.squareHeight;
   var ctx = this.ctx;
   var theme = this.theme;
+  var boardx88 = this.board.boardx88;
   var pieceList = this.board.pieceList;
-  var curPiece, curSprite, activeSprite;
+  var curPiece, curSprite, activeSprite, sq;
 
   // Draw primary squares
   ctx.fillStyle = this.boardSecondaryColor;
@@ -46,25 +51,30 @@ BoardView.prototype.draw = function () {
   }
 
   // Draw pieces
-  for (var pieceCode in pieceList) {
-    curPiece = pieceList[pieceCode];
-    curSprite = theme[Board.CODES[pieceCode]];
-    for (var i = 0; i < curPiece.length; i++) {
-      if (curPiece[i] === this.heldPiece) {
-        activeSprite = curSprite;
-      } else {
-        ctx.drawImage(
-          theme.sprite,
-          curSprite.x,
-          curSprite.y,
-          theme.pieceSize,
-          theme.pieceSize,
-          Board.file(curPiece[i]) * squareWidth,
-          (7 - Board.rank(curPiece[i]))* squareHeight,
-          squareWidth,
-          squareHeight
-        );
-      }
+  for (var i = 0, len = pieceList.len; i < len; i++) {
+    sq = pieceList[i];
+
+    if (sq === 0xff) {
+      continue;
+    }
+
+    curPiece = boardx88[sq];
+    curSprite = theme[Board.CODES[curPiece]];
+
+    if (sq === this.heldPiece) {
+      activeSprite = curSprite;
+    } else {
+      ctx.drawImage(
+        theme.sprite,
+        curSprite.x,
+        curSprite.y,
+        theme.pieceSize,
+        theme.pieceSize,
+        Board.file(sq) * squareWidth,
+        (7 - Board.rank(sq))* squareHeight,
+        squareWidth,
+        squareHeight
+      );
     }
   }
 
@@ -75,8 +85,8 @@ BoardView.prototype.draw = function () {
       activeSprite.y,
       theme.pieceSize,
       theme.pieceSize,
-      this.heldPiecePos.x - .5 * squareWidth,
-      this.heldPiecePos.y - .5 * squareHeight,
+      this.heldPiecePos.x - 0.5 * squareWidth,
+      this.heldPiecePos.y - 0.5 * squareHeight,
       squareWidth,
       squareHeight
     );
@@ -121,4 +131,4 @@ BoardView.prototype.setHeldPiece = function (fromSquare, pointer) {
 
   this.heldPiecePos.x = pointer.x;
   this.heldPiecePos.y = pointer.y;
-}
+};

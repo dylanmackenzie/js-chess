@@ -41,7 +41,7 @@ BoardController.prototype.pointerUp = function (e) {
 
   if (this.heldPiece != null) {
     try {
-      this.board.move({from: this.heldPiece, to: Board.sq(pointer.rank, pointer.file)});
+      this.board.makeMove({from: this.heldPiece, to: Board.sq(pointer.rank, pointer.file)});
     } catch (e) {
       if (e.name === 'IllegalMoveException'){
         console.log('Illegal Move');
