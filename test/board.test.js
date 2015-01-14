@@ -11,52 +11,9 @@ var _ = require('lodash');
 var assert = require('chai').assert;
 var util = require('util');
 var pgn = Board.pgntox88;
+var PIECES = Board.PIECES;
 
-var fens = {
-  squareAttacked: 'r2q1rk1/ppp2pp1/3b1nnp/8/6bB/2N1PN2/PPP1BPPP/R2QK2R w KQ - 5 11',
-  'generates pawn moves': '8/4p2P/2p2N2/8/4pP2/p1r4P/1P6/8 b - f3 3 6',
-  'generates bishop moves': '7r/8/3r4/4b3/8/8/1R6/8 b - - 1 1',
-  'generates knight moves': '3n4/8/8/8/8/3N4/2b2q2/4N3 b - - 1 1',
-  'generates rook moves': '2n5/8/2r2B2/2Q5/8/8/8/8 b - - 1 1',
-  'generates queen moves': '3N4/6B1/4pQb1/8/5N1n/8/8/8 w - - 1 1',
-  'generates castles': 'r3k2r/ppp2ppp/2q5/2b1Q3/8/Pn3P2/6PP/R3K2R b KQkq - 20 10',
-  'handles pinned pieces': '8/5q1R/8/2NK4/8/8/3B4/8 w - - 20 10',
-  'should move the king out of check': '8/8/8/4K3/6n1/8/7P/8 w - - 20 10',
-  'should not allow the king to move into check': '8/2Q5/8/2k5/8/2Q5/8/8 b - - 20 10',
-  'should allow the checking piece to be captured': '8/7N/8/3K2q1/8/8/8/8 w - - 20 10',
-  'should allow checks to be blocked': '8/4r3/8/8/4K3/8/7B/8 w - - 20 10',
-
-};
-
-assert.containsMove = function (board, from, to) {
-  var fromSq = pgn(from);
-  var moves = board.legalMoves;
-  var explanation = 'board:\n'+board.toString()+'\nmove list for '+from+' did not include ';
-  moves = _.filter(moves, { from: fromSq });
-
-  if (!util.isArray(to)) {
-    to = [ to ];
-  }
-
-  for (var i = 0, len = to.length; i < len; i++) {
-    assert.include(_.pluck(moves, 'to'), pgn(to[i]), explanation + to[i]);
-  }
-};
-
-assert.notContainsMove = function (board, from, to) {
-  var fromSq = pgn(from);
-  var moves = board.legalMoves;
-  var explanation = 'board:\n'+board.toString()+'\nmove list for '+from+' did not include ';
-  moves = _.filter(moves, { from: fromSq });
-
-  if (!util.isArray(to)) {
-    to = [ to ];
-  }
-
-  for (var i = 0, len = to.length; i < len; i++) {
-    assert.notInclude(_.pluck(moves, 'to'), pgn(to[i]), explanation + to[i]);
-  }
-};
+var fens = {};
 
 describe('Board', function () {
   describe('Board()', function () {
@@ -116,26 +73,100 @@ describe('Board', function () {
   });
 
   describe('#makeMove()', function () {
-    it('should update the board with the new move', function () {
+    var board;
 
+    function makeMove(from, to) {
+      var fromSq = pgn(from);
+      var toSq = pgn(to);
+      var explanation = 'board:\n'+board.toString()+'\n';
+
+      try {
+        board.makeMove({ from: fromSq, to: toSq });
+      } catch (e) {
+        assert.fail(1, 2, explanation+'makeMove from '+from+' to '+to+' failed: '+e);
+      }
+    };
+
+    function testMove(from, to, pieceCode) {
+      var fromSq = pgn(from);
+      var toSq = pgn(to);
+      var pieceCode, msgFrom, msgTo;
+      var explanation = 'board:\n'+board.toString()+'\n';
+
+      if (pieceCode == null) {
+        pieceCode = board.boardx88[fromSq];
+        try {
+          board.makeMove({ from: fromSq, to: toSq });
+        } catch (e) {
+          assert.fail(1, 2, explanation+'makeMove from '+from+' to '+to+' failed: '+e);
+        }
+      }
+
+      msgFrom = from+' should be empty, not '+Board.CODES[board.boardx88[fromSq]];
+      msgTo = to+' should be '+Board.CODES[pieceCode]+', not '+Board.CODES[board.boardx88[toSq]];
+
+      assert.equal(board.boardx88[fromSq], PIECES.x, explanation + msgFrom);
+      assert.equal(board.boardx88[toSq], pieceCode, explanation + msgTo);
+    }
+
+    fens.makeMove = {
+      'should update the board with the new move': '8/8/8/3q4/8/8/8/8 b - - 20 10',
+      'should move two pieces when castling': 'r3k2r/ppp2ppp/8/8/8/P4P2/6PP/R3K2R w KQkq - 20 10',
+      'should update the legal castles list when a king is moved': 'r3k2r/ppp2ppp/8/8/8/P4P2/6PP/R3K2R w KQkq - 20 10',
+      'should update the legal castles list when a rook is moved': 'r3k2r/ppp2ppp/8/8/8/P4P2/6PP/R3K2R w KQkq - 20 10',
+      'should update the pieceList given a regular move': 'r3k2r/ppp2ppp/8/8/8/P4P2/6PP/R3K2R w KQkq - 20 10',
+      'should update the pieceList given a capture':  '8/4p2P/2p2N2/8/4pP2/p1r4P/1P6/8 w - f3 3 6',
+      'should update the pieceList given an en passant capture': '8/4p2P/2p2N2/8/4pP2/p1r4P/1P6/8 b - f3 3 6',
+      'should update the en passant square when a pawn double moves': '8/8/8/8/8/8/P7/8 w - - 10 20',
+      'should clear the en passant square the next move': '8/8/8/8/P7/8/8/8 w - a3 10 20'
+    };
+
+    beforeEach(function () {
+      board = new Board(fens.makeMove[this.currentTest.title] ||
+        fens.makeMove[this.currentTest.parent.title] || null);
+    });
+
+    it('should update the board with the new move', function () {
+      testMove('d5', 'f7');
     });
     it('should move two pieces when castling', function () {
-
+      testMove('e1', 'c1');
+      testMove('a1', 'd1', PIECES.R);
     });
     it('should update the legal castles list when a king is moved', function () {
-
+      makeMove('e1', 'd1');
+      assert.notInclude(board.legalCastles, pgn('a1'));
+      assert.notInclude(board.legalCastles, pgn('h1'));
     });
     it('should update the legal castles list when a rook is moved', function () {
-
+      makeMove('a1', 'c1');
+      assert.notInclude(board.legalCastles, pgn('a1'));
+      assert.include(board.legalCastles, pgn('h1'));
     });
     it('should update the pieceList given a regular move', function () {
-
+      var index = Array.prototype.indexOf.call(board.pieceList, pgn('h2'));
+      makeMove('h2', 'h4');
+      assert.equal(board.pieceList[index], pgn('h4'));
     });
-    it('should update the pieceList given a caputre', function () {
-
+    it('should update the pieceList given a capture', function () {
+      var length = board.pieceList.len;
+      makeMove('b2', 'a3');
+      assert.equal(board.pieceList.len, length - 1);
     });
     it('should update the pieceList given an en passant capture', function () {
-
+      var length = board.pieceList.len;
+      var index = Array.prototype.indexOf.call(board.pieceList, pgn('h2'));
+      makeMove('e4', 'f3');
+      assert.notEqual(board.pieceList[index], pgn('f3'));
+      assert.equal(board.pieceList.len, length - 1);
+    });
+    it('should update the en passant square when a pawn double moves', function () {
+      makeMove('a2', 'a4');
+      assert.equal(board.enPassant, pgn('a3'));
+    });
+    it('should clear the en passant square the next move', function () {
+      makeMove('a4', 'a5');
+      assert.equal(board.enPassant, 0xff);
     });
   });
 
@@ -158,9 +189,57 @@ describe('Board', function () {
   describe('#generateMoves()', function () {
     var board;
 
+    assert.containsMove = function (board, from, to) {
+      var fromSq = pgn(from);
+      var moves = board.legalMoves;
+      var explanation = 'board:\n'+board.toString()+'\nmove list for '+from+' did not include ';
+      moves = _.filter(moves, { from: fromSq });
+
+      if (!util.isArray(to)) {
+        to = [ to ];
+      }
+
+      for (var i = 0, len = to.length; i < len; i++) {
+        assert.include(_.pluck(moves, 'to'), pgn(to[i]), explanation + to[i]);
+      }
+    };
+
+    assert.notContainsMove = function (board, from, to) {
+      var fromSq = pgn(from);
+      var moves = board.legalMoves;
+      var explanation = 'board:\n'+board.toString()+'\nmove list for '+from+' included ';
+      moves = _.filter(moves, { from: fromSq });
+
+      if (!util.isArray(to)) {
+        to = [ to ];
+      }
+
+      for (var i = 0, len = to.length; i < len; i++) {
+        assert.notInclude(_.pluck(moves, 'to'), pgn(to[i]), explanation + to[i]);
+      }
+    };
+
+    fens.generateMoves = {
+      'generates pawn moves': '8/4p2P/2p2N2/8/4pP2/p1r4P/1P6/8 b - f3 3 6',
+      'generates bishop moves': '7r/8/3r4/4b3/8/8/1R6/8 b - - 1 1',
+      'generates knight moves': '3n4/8/8/8/8/3N4/2b2q2/4N3 b - - 1 1',
+      'generates rook moves': '2n5/8/2r2B2/2Q5/8/8/8/8 b - - 1 1',
+      'generates queen moves': '3N4/6B1/4pQb1/8/5N1n/8/8/8 w - - 1 1',
+      'generates castles': 'r3k2r/ppp2ppp/2q5/2b1Q3/8/P4P2/6PP/R1N1K2R w KQkq - 20 10',
+      'should allow castling': 'r3k2r/ppp2ppp/8/8/8/P4P2/6PP/R3K2R w KQkq - 20 10',
+      'should disallow castles out of check':'r3k2r/ppp2ppp/2q5/2b1Q3/8/P4P2/6PP/R1N1K2R b KQkq - 20 10',
+      'handles pinned pieces': '8/5q1R/8/2NK4/8/8/3B4/8 w - - 20 10',
+      'should move the king out of check': '8/8/8/4K3/6n1/8/7P/8 w - - 20 10',
+      'should not allow the king to move into check': '8/2Q5/8/2k5/8/2Q5/8/8 b - - 20 10',
+      'should allow the checking piece to be captured': '8/7N/8/3K2q1/8/8/8/8 w - - 20 10',
+      'should allow checks to be blocked': '8/4r3/8/8/4K3/8/7B/8 w - - 20 10',
+      'should not allow the king to move into the square it blocks from a sliding piece': '8/8/8/5q2/5K2/8/8/8 w - - 10 20',
+      'should not allow the king to move into the square it blocks from a sliding piece in double check': '8/8/8/4bq2/5K2/8/8/8 w - - 10 20',
+    };
+
     beforeEach(function () {
-      board = new Board(fens[this.currentTest.title] ||
-        fens[this.currentTest.parent.title] || null);
+      board = new Board(fens.generateMoves[this.currentTest.title] ||
+        fens.generateMoves[this.currentTest.parent.title] || null);
     });
 
     describe('generates pawn moves', function () {
@@ -250,6 +329,9 @@ describe('Board', function () {
     });
 
     describe('generates castles', function () {
+      it('should allow castling', function () {
+        assert.containsMove(board, 'e1', ['c1', 'g1']);
+      });
       it('should disallow castles through other pieces', function () {
         assert.notContainsMove(board, 'e1', 'c1');
       });
@@ -269,6 +351,12 @@ describe('Board', function () {
       it('should not allow the king to move into check', function () {
         assert.containsMove(board, 'c5', ['b5', 'd5']);
         assert.notContainsMove(board, 'c5', ['b4', 'c4', 'd4', 'b6', 'c6', 'd6']);
+      });
+      it('should not allow the king to move into the square it blocks from a sliding piece', function () {
+        assert.notContainsMove(board, 'f4', 'f3');
+      });
+      it('should not allow the king to move into the square it blocks from a sliding piece in double check', function () {
+        assert.notContainsMove(board, 'f4', ['f3', 'g3']);
       });
       it('should allow the checking piece to be captured', function () {
         assert.containsMove(board, 'h7', 'g5');
@@ -296,6 +384,9 @@ describe('Board', function () {
 
   describe('#squareAttacked()', function () {
     var board;
+
+    fens.squareAttacked = 'r2q1rk1/ppp2pp1/3b1nnp/8/6bB/2N1PN2/PPP1BPPP/R2QK2R w KQ - 5 11';
+
     before(function () {
       board = new Board(fens.squareAttacked);
     });

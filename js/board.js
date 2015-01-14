@@ -10,7 +10,10 @@ function Move(from, to, opts) {
   this.from = from;
   this.castle = opts ? opts.castle : undefined;
   this.promoteTo = opts ? opts.promoteTo : undefined;
+  this.enPassant = opts ? opts.enPassant : false;
+  this.capture = opts ? opts.capture : false;
 }
+
 Move.prototype.inspect = function () {
   var val, str = '{ ';
 
@@ -228,6 +231,10 @@ Board.prototype.initPieceList = function () {
    *}
    */
 
+  if (kings > 5) {
+    throw new TypeError('invalid FEN string: More than one king of a single type');
+  }
+
   this.pieceList.len = j;
 };
 
@@ -266,9 +273,10 @@ Board.prototype.makeMove = function (move) {
     throw new IllegalMoveException(move);
 
   this.whiteToMove = !this.whiteToMove;
+  this.updateLegalCastles(fullMove); // must be done before updating piece list
   this.updatePieceList(fullMove); // must be done before updating board
   this.updateBoard(fullMove);
-  this.updateLegalCastles(fullMove);
+  this.updateEnPassant(fullMove);
   this.generateMoves();
 };
 
@@ -276,10 +284,19 @@ Board.prototype.updateBoard = function (move) {
   var board = this.boardx88;
   var from = move.from, to = move.to;
   var pieceCode = board[from];
+  var kingDelta, rookTo, ep;
 
-  if (move.castle) {
-    board[move.castle.to] = board[move.castle.from];
-    board[move.castle.from] = PIECES.x;
+  if (move.castle != null) {
+    kingDelta = move.to - move.from;
+    rookTo = move.from + kingDelta / 2;
+
+    board[rookTo] = board[move.castle];
+    board[move.castle] = PIECES.x;
+  }
+
+  if (move.capture && move.enPassant) {
+    ep = move.to - 16 * ((move.to - move.from) > 0 ? 1 : -1);
+    board[ep] = PIECES.x;
   }
 
   board[from] = PIECES.x;
@@ -290,7 +307,7 @@ Board.prototype.updateBoard = function (move) {
 Board.prototype.filterLegalMoves = function (checkers, whiteToMove) {
   var board = this.boardx88;
   var pieceList = this.pieceList;
-  var kingSq, checkingSq;
+  var kingSq, checkingSq, piece;
   var kingOffset, checkingOffset;
   var that = this;
 
@@ -298,10 +315,21 @@ Board.prototype.filterLegalMoves = function (checkers, whiteToMove) {
 
   if (checkers.length >= 2) { // double check
     return this.legalMoves.filter(function (move) {
-      if (move.from === kingSq) {
-        return !that.squareAttacked(move.to, !whiteToMove);
-      } else {
+      if (move.from !== kingSq || that.squareAttacked(move.to, !whiteToMove)) { // king move
         return false;
+      } else {
+        for (var i = 0, len = checkers.length; i < len; i++) {
+          checkingSq = checkers[i];
+          piece = board[checkingSq];
+          checkingOffset = kingSq - checkingSq;
+          kingOffset = move.to - move.from;
+
+          if (isSlider(piece) && isValidDelta(checkingOffset, kingOffset)) {
+            return false;
+          }
+        }
+
+        return true;
       }
     });
   } else if (checkers.length === 1) { // check
@@ -309,7 +337,12 @@ Board.prototype.filterLegalMoves = function (checkers, whiteToMove) {
 
     return this.legalMoves.filter(function (move) {
       if (move.from === kingSq) { // king move
-        return !that.squareAttacked(move.to, !whiteToMove);
+        if (that.squareAttacked(move.to, !whiteToMove)) {
+          return false;
+        } else {
+          return (!isSlider(board[checkingSq]) ||
+            !isValidDelta(kingSq - checkingSq, move.to - move.from));
+        }
       }
 
       if (move.to === checkingSq) { // capture checking piece
@@ -347,7 +380,7 @@ Board.prototype.updateLegalCastles = function (move) {
   var legalCastles = this.legalCastles;
   var from = move.from;
 
-  if (legalCastles.indexOf(from) > -1) {
+  if (legalCastles.indexOf(from) !== -1) {
     legalCastles[legalCastles.indexOf(from)] = 0xff;
   }
 
@@ -364,23 +397,40 @@ Board.prototype.updateLegalCastles = function (move) {
 
 Board.prototype.updatePieceList = function (move) {
   var pieceList = this.pieceList;
+  var ep = false;
+
+  if (move.enPassant && move.capture) {
+    ep = move.to - 16 * ((move.to - move.from) > 0 ? 1 : -1);
+  }
 
   for (var i = 0, len = pieceList.len; i < len; i++) {
-    if (pieceList[i] === move.to) { // captured piece
-      pieceList.len--;
-      len--;
+
+    // check captures at top, so when a captured piece is replaced, we
+    // check the piece it is replaced by in the subsequent if statements
+    // without having to decrement the counter
+    if (pieceList[i] === move.to || pieceList[i] === ep) { // capture
+      pieceList.len = --len;
       pieceList[i] = pieceList[len];
+      pieceList[len] = 0;
     }
 
     if (pieceList[i] === move.from) { // moved piece
       pieceList[i] = move.to;
     }
 
-    if (move.castle && pieceList[i] === move.castle.from) {
-      pieceList[i] = move.castle.to;
+    if (move.castle != null && pieceList[i] === move.castle) {
+      pieceList[i] = move.to - (move.to - move.from) / 2;
     }
   }
 };
+
+Board.prototype.updateEnPassant = function (move) {
+  if (move.enPassant && !move.capture) { // double pawn move
+    this.enPassant = move.to - (move.to - move.from) / 2;
+  } else {
+    this.enPassant = 0xff;
+  }
+}
 
 Board.prototype.checkMove = function (move) {
   var legalMoves = this.legalMoves;
@@ -398,11 +448,10 @@ Board.prototype.checkMove = function (move) {
 Board.prototype.generateMoves = function (whiteToMove) {
   var board = this.boardx88;
   var pieceList = this.pieceList;
+  var legalMoves = this.legalMoves = [];
   var that = this;
-  var pieceCode, moves, sq, pins, kingSq, delta, pinnedDeltas;
-  var checkers;
-
-  this.legalMoves = [];
+  var pieceCode, moves, sq, pins, kingSq;
+  var checkers, delta, pinnedDeltas;
 
   if (whiteToMove == null) {
     whiteToMove = this.whiteToMove;
@@ -448,14 +497,16 @@ Board.prototype.generateMoves = function (whiteToMove) {
     }
 
     if (moves.length > 0) {
-      this.legalMoves = this.legalMoves.concat(moves);
+      legalMoves = legalMoves.concat(moves);
     }
   }
 
   checkers = this.squareAttacked(kingSq, !whiteToMove, true);
 
-  if (checkers === false) { // no check
-    this.legalMoves = this.legalMoves.concat(this.generateCastles());
+  this.legalMoves = legalMoves;
+
+  if (!checkers) { // no check
+    this.legalMoves = legalMoves.concat(this.generateCastles(whiteToMove));
   } else {
     this.legalMoves = this.filterLegalMoves(checkers, whiteToMove);
   }
@@ -474,15 +525,16 @@ Board.prototype.calculatePins = function (sq, whiteToMove) {
 
   for (var i = 2, len = pieceList.len; i < len; i++) {
     pieceSq = pieceList[i];
-    pieceCode = board[pieceCode];
+    pieceCode = board[pieceSq];
 
+    // select only sliding enemy pieces
     if (isWhite(pieceCode) === whiteToMove || !isSlider(pieceCode)) {
       continue;
     }
 
     pinnedSq = this.isSliderAttacking(pieceSq, sq, DELTAS[pieceCode], 1);
 
-    if (!pinnedSq || pinnedSq === true || isWhite(board[pinnedSq]) !== whiteToMove) {
+    if (pinnedSq === false || pinnedSq === true || isWhite(board[pinnedSq]) !== whiteToMove) {
       continue;
     }
 
@@ -542,10 +594,10 @@ Board.prototype.generatePawnMoves = function (sq, deltas) {
       tmpCode = board[tmp];
       if (tmpCode !== PIECES.x) { // square not empty
         if (isWhite(tmpCode) !== whitePawn) { // piece opposite color
-          moves.push(new Move(sq, tmp));
+          moves.push(new Move(sq, tmp, { capture: true }));
         }
       } else if (tmp === ep) { // e.p.
-        moves.push(new Move(sq, tmp));
+        moves.push(new Move(sq, tmp, { enPassant: true, capture: true }));
       }
     }
   }
@@ -554,7 +606,7 @@ Board.prototype.generatePawnMoves = function (sq, deltas) {
   if (doubleMove && rank(sq) === (whitePawn ? 1 : 6)) {
     tmp = pmul * 32 + sq;
     if (!(tmp & 0x88) && board[tmp] === PIECES.x) {
-      moves.push(new Move(sq, tmp, { enPassant: tmp - pmul * 16 }));
+      moves.push(new Move(sq, tmp, { enPassant: true }));
     }
 
   }
@@ -577,7 +629,7 @@ Board.prototype.generateJumperMoves = function (sq, deltas) {
       if (tmpCode === PIECES.x) { // square empty
         moves.push(new Move(sq, tmp));
       } else if (isWhite(tmpCode) !== iswhite) { // capturable piece
-        moves.push(new Move(sq, tmp));
+        moves.push(new Move(sq, tmp, { capture: true }));
       }
     }
   }
@@ -602,7 +654,7 @@ Board.prototype.generateSliderMoves = function (sq, deltas) {
 
     // capture
     if (!(tmp & 0x88) && isWhite(board[tmp]) !== iswhite) {
-      moves.push(new Move(sq, tmp));
+      moves.push(new Move(sq, tmp, { capture: true }));
     }
   }
 
@@ -625,7 +677,7 @@ Board.prototype.generateCastles = function (whiteToMove) {
     return moves;
   }
 
-  if (this.squareAttacked(kingSq, whiteToMove)) {
+  if (this.squareAttacked(kingSq, !whiteToMove)) {
     return moves;
   }
 
@@ -641,14 +693,14 @@ Board.prototype.generateCastles = function (whiteToMove) {
     delta = offset > 0 ? 1 : -1;
 
     for (var j = 0, tmp = kingSq + delta; j < 2 ; j++, tmp += delta) {
-      if (!this.squareOccupied(tmp) || this.squareAttacked(tmp, !whiteToMove)) {
+      if (this.squareOccupied(tmp) || this.squareAttacked(tmp, !whiteToMove)) {
         flag = false;
         break;
       }
     }
 
     if (flag) {
-      moves.push(new Move(kingSq, tmp - delta, { castles: rookSq }));
+      moves.push(new Move(kingSq, tmp - delta, { castle: rookSq }));
     }
   }
 
