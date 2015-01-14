@@ -296,15 +296,7 @@ Board.prototype.filterLegalMoves = function (checkers, whiteToMove) {
 
   kingSq = pieceList[ whiteToMove ? 0 : 1 ];
 
-  if (checkers === false) { // no check
-    return this.legalMoves.filter(function (move) {
-      if (move.from === kingSq) {
-        return !that.squareAttacked(move.to, !whiteToMove);
-      } else {
-        return true;
-      }
-    });
-  } else if (checkers.length >= 2) { // double check
+  if (checkers.length >= 2) { // double check
     return this.legalMoves.filter(function (move) {
       if (move.from === kingSq) {
         return !that.squareAttacked(move.to, !whiteToMove);
@@ -406,6 +398,7 @@ Board.prototype.checkMove = function (move) {
 Board.prototype.generateMoves = function (whiteToMove) {
   var board = this.boardx88;
   var pieceList = this.pieceList;
+  var that = this;
   var pieceCode, moves, sq, pins, kingSq, delta, pinnedDeltas;
   var checkers;
 
@@ -436,6 +429,11 @@ Board.prototype.generateMoves = function (whiteToMove) {
 
     if (pins == null || pins.indexOf(sq) === -1) {
       moves = this.generatePieceMoves(sq, pieceCode);
+      if (pieceCode === PIECES.k || pieceCode === PIECES.K) {
+        moves = moves.filter(function (move) {
+          return !that.squareAttacked(move.to, !whiteToMove);
+        });
+      }
     } else {
       moves = [];
       for (var j = 0, len2 = DELTAS[pieceCode].length; j < len2; j++) {
@@ -456,11 +454,12 @@ Board.prototype.generateMoves = function (whiteToMove) {
 
   checkers = this.squareAttacked(kingSq, !whiteToMove, true);
 
-  if (checkers.length === 0) { // no check
+  if (checkers === false) { // no check
     this.legalMoves = this.legalMoves.concat(this.generateCastles());
+  } else {
+    this.legalMoves = this.filterLegalMoves(checkers, whiteToMove);
   }
 
-  this.legalMoves = this.filterLegalMoves(checkers, whiteToMove);
 };
 
 Board.prototype.calculatePins = function (sq, whiteToMove) {
