@@ -66,6 +66,9 @@ export default function Board(fen) {
   this.enPassant = fields[3] == '-' ? 0xff : pgntox88(fields[3]);
   this.halfMoves = fields[4];
   this.fullMoves = fields[5];
+  this.isCheck = false;
+  this.isCheckmate = false;
+  this.isStalemate = false;
 
   this.initBoardFromFEN(fields[0]);
   this.initPieceList();
@@ -278,6 +281,13 @@ Board.prototype.makeMove = function (move) {
   this.updateBoard(fullMove);
   this.updateEnPassant(fullMove);
   this.generateMoves();
+  if (this.isCheck) {
+    if (this.isCheckmate) {
+      console.log('Checkmate!');
+    } else {
+      console.log('Check!');
+    }
+  }
 };
 
 Board.prototype.updateBoard = function (move) {
@@ -506,9 +516,19 @@ Board.prototype.generateMoves = function (whiteToMove) {
   this.legalMoves = legalMoves;
 
   if (!checkers) { // no check
+    this.isCheck = false;
     this.legalMoves = legalMoves.concat(this.generateCastles(whiteToMove));
   } else {
+    this.isCheck = true;
     this.legalMoves = this.filterLegalMoves(checkers, whiteToMove);
+  }
+
+  if (this.legalMoves.length === 0) {
+    if (this.isCheck) {
+      this.isCheckmate = true;
+    } else {
+      this.isStalemate = true;
+    }
   }
 
 };
